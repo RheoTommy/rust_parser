@@ -295,7 +295,7 @@ enum BinOpKind {
     Add,
     Sub,
     Multi,
-    Dev,
+    Div,
 }
 
 type BinOp = Annotation<BinOpKind>;
@@ -314,7 +314,7 @@ impl BinOp {
     }
     
     fn div(loc: Loc) -> Self {
-        Self::new(BinOpKind::Dev, loc)
+        Self::new(BinOpKind::Div, loc)
     }
 }
 
@@ -602,6 +602,94 @@ fn show_trace<E: StdError>(e: E) {
     }
 }
 
+struct Interpreter;
+
+impl Interpreter {
+    pub fn new() -> Self {
+        Interpreter
+    }
+    
+    pub fn eval(&mut self, expr: &Ast) -> Result<isize, InterpreterError> {
+        use self::AstKind::*;
+        
+        match expr.value {
+            Num(n) => Ok(n as isize),
+            UniOp { ref op, ref e } => {
+                let e = self.eval(e)?;
+                Ok(self.eval_uni_op(op, e))
+            }
+            BinOp {
+                ref op,
+                ref l,
+                ref r,
+            } => {
+                let l = self.eval(l)?;
+                let r = self.eval(r)?;
+                self.eval_bin_op(op, l, r)
+                    .map_err(|e| InterpreterError::new(e, expr.loc.clone()))
+            }
+        }
+    }
+    
+    pub fn eval_uni_op(&mut self, op: &UniOp, n: isize) -> isize {
+        use UniOpKind::*;
+        match op.value {
+            Plus => n,
+            Minus => -n,
+        }
+    }
+    
+    pub fn eval_bin_op(&mut self, op: &BinOp, l: isize, r: isize) -> Result<isize, InterpreterErrorKind> {
+        use self::BinOpKind::*;
+        
+        match op.value {
+            Add => Ok(l + r),
+            Sub => Ok(l - r),
+            Multi => Ok(l * r),
+            Div => {
+                if r == 0 {
+                    Err(InterpreterErrorKind::DivisionByZero)
+                } else {
+                    Ok(l / r)
+                }
+            }
+        }
+    }
+}
+
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+enum InterpreterErrorKind {
+    DivisionByZero,
+}
+
+type InterpreterError = Annotation<InterpreterErrorKind>;
+
+impl fmt::Display for InterpreterError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use InterpreterErrorKind::*;
+        match self.value {
+            DivisionByZero => write!(f, "{}: Div by zero", self.loc)
+        }
+    }
+}
+
+impl StdError for InterpreterError {
+    fn description(&self) -> &str {
+        use self::InterpreterErrorKind::*;
+        
+        match self.value {
+            DivisionByZero => "the right hand expression of the division evaluates to zero",
+        }
+    }
+}
+
+impl InterpreterError {
+    fn show_diagnostic(&self, input: &str) {
+        eprintln!("{}", self);
+        print_annotation(input, self.loc.clone());
+    }
+}
 
 fn prompt(s: &str) -> io::Result<()> {
     let stdout = stdout();
@@ -616,6 +704,7 @@ fn main() {
     let stdin = BufReader::new(stdin);
     let mut lines = stdin.lines();
     
+    let mut interp = Interpreter::new();
     loop {
         prompt("> ").unwrap();
         
@@ -629,7 +718,15 @@ fn main() {
                 }
             };
             
-            println!("{:?}", ast);
+            let n = match interp.eval(&ast) {
+                Ok(n) => n,
+                Err(e) => {
+                    e.show_diagnostic(&line);
+                    show_trace(e);
+                    continue;
+                }
+            };
+            println!("{:?}", n);
         } else {
             unimplemented!();
         }
